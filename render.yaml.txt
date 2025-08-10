@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: tv-bingx-webhook
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    plan: free
+    envVars:
+      - key: BINGX_API_KEY
+        sync: false
+      - key: BINGX_SECRET_KEY
+        sync: false
+      - key: BINGX_BASE_URL
+        value: https://open-api-vst.bingx.com
