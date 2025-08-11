@@ -1,8 +1,6 @@
 from flask import Flask, request, jsonify
 import os, time, hmac, hashlib, requests
-@app.get("/")
-def index():
-    return {"msg": "OK. Use /health and POST /webhook"}
+
 
 app = Flask(__name__)
 
@@ -50,4 +48,5 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
