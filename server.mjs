@@ -1,22 +1,40 @@
 // server.mjs
 import express from "express";
+import { randomUUID } from "crypto";
 
 const app = express();
 
-// 解析 JSON（限制 1MB）
+// Parse JSON (limit 1MB) and return 400 on bad JSON instead of 500
 app.use(express.json({ limit: "1mb" }));
-
-// 把 JSON 解析錯誤變成 400，而不是 500
-app.use((err, req, res, next) => {
+app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({ error: "invalid_json" });
   }
   next();
 });
 
-const ORDER_MODE = process.env.ORDER_MODE ?? "test";
+// --- config ---
+const ORDER_MODE = process.env.ORDER_MODE ?? "test";          // "test" | "live"
+const WEBHOOK_SECRET = (process.env.WEBHOOK_SECRET ?? "").normalize().trim();
 
-// 基本存活檢查
+// --- helpers ---
+const sanitize = (obj = {}) => {
+  const c = { ...obj };
+  if ("passphrase" in c) c.passphrase = "***";
+  if ("token" in c) c.token = "***";
+  return c;
+};
+const normSymbol = (s) =>
+  String(s || "")
+    .replace(/^.*?:/, "")     // drop exchange prefix like BINANCE:
+    .replace(/\.P$/i, "")     // drop .P (perp) suffix if present
+    .toUpperCase();
+
+// simple dedupe (keep last ~5000 keys)
+const seen = new Set();
+const maybePrune = () => { if (seen.size > 5000) seen.clear(); };
+
+// --- liveness ---
 app.get("/", (_req, res) =>
   res.json({ ok: true, service: "tv-bingx-webhook", orderMode: ORDER_MODE })
 );
@@ -24,49 +42,68 @@ app.get("/health", (_req, res) =>
   res.json({ ok: true, service: "tv-bingx-webhook", orderMode: ORDER_MODE })
 );
 
-// 簡易防重複（短時間同樣的 id 不重複處理）
-const seen = new Set();
-const maybePrune = () => { if (seen.size > 5000) seen.clear(); };
+// --- webhook handler ---
+async function processSignal(data, traceId) {
+  const symbol = normSymbol(data.symbol);
+  const side = String(data.side || "").toUpperCase(); // BUY/SELL
+  const price = Number(data.price ?? 0);
 
-// Webhook 主處理
+  // TODO: map to your exchange payload here
+  // e.g., build order params, sign, and call exchange HTTP API.
+  // For now we just log a dry-run / live intent.
+  if (ORDER_MODE === "test") {
+    console.log(`[${traceId}] DRY-RUN`, { symbol, side, price });
+  } else {
+    console.log(`[${traceId}] LIVE - TODO place order`, { symbol, side, price });
+    // try {
+    //   const resp = await fetch("https://api.your-exchange.com/orders", {...});
+    //   console.log(`[${traceId}] order result`, await resp.json());
+    // } catch (e) {
+    //   console.error(`[${traceId}] order error`, e);
+    // }
+  }
+}
+
 const webhook = (req, res) => {
   const data = req.body ?? {};
-  const secret = process.env.WEBHOOK_SECRET ?? "";
+  const got = String((data.passphrase ?? data.token ?? "")).normalize().trim();
 
-  // 密碼驗證（支援 passphrase 或 token 欄位）
-  if (secret) {
-    const got = ((data.passphrase ?? data.token) ?? "").toString().trim();
+  // auth
+  if (WEBHOOK_SECRET) {
     if (!got) return res.status(401).json({ error: "missing passphrase" });
-    if (got !== secret) return res.status(401).json({ error: "bad passphrase" });
+    if (got !== WEBHOOK_SECRET) return res.status(401).json({ error: "bad passphrase" });
   }
 
-  // 防重送：優先用 data.id；沒有就用符號+方向+價格+5秒桶
-  const dedupeKey =
+  const traceId = randomUUID();
+  res.setHeader("X-Request-Id", traceId);
+
+  // dedupe key: prefer client-provided id, else a 5s bucket fallback
+  const key =
     data.id ??
     `${data.symbol ?? ""}|${data.side ?? ""}|${data.price ?? ""}|${Math.floor(Date.now() / 1000 / 5)}`;
+  const duplicate = seen.has(key);
+  if (!duplicate) { seen.add(key); maybePrune(); }
 
-  const duplicate = seen.has(dedupeKey);
-  if (!duplicate) {
-    seen.add(dedupeKey);
-    maybePrune();
-  }
+  // immediate response (sanitized)
+  const safeEcho = sanitize(data);
+  res.json({ ok: true, duplicate, id: traceId, echo: safeEcho });
 
-  // 立刻回應 200，後續你可以把實際下單放到背景處理
-  res.json({ ok: true, duplicate, echo: data });
-
-  // TODO: 在這裡接你的下單/記錄流程（非阻塞）
-  console.log("Webhook payload:", data, "duplicate:", duplicate);
+  // background processing (non-blocking)
+  setImmediate(() => {
+    try {
+      console.log(`[${traceId}] Webhook payload`, sanitize(data), `duplicate=${duplicate}`);
+      if (!duplicate) processSignal(data, traceId);
+    } catch (e) {
+      console.error(`[${traceId}] handler error`, e);
+    }
+  });
 };
 
-// 支援有/無尾斜線
+// routes (support with/without trailing slash; GET hints 405)
 app.post("/webhook", webhook);
 app.post("/webhook/", webhook);
+app.get("/webhook", (_req, res) => res.status(405).json({ hint: "use POST /webhook" }));
 
-// GET /webhook 時給提示，避免誤會 404
-app.get("/webhook", (_req, res) =>
-  res.status(405).json({ hint: "use POST /webhook" })
-);
-
-// 啟動
+// start
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log("listening on", port));
