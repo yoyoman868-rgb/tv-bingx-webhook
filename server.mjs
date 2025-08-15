@@ -14,9 +14,17 @@ app.get("/health", (_req, res) =>
 const webhook = (req, res) => {
   const data = req.body ?? {};
   const secret = process.env.WEBHOOK_SECRET ?? "";
-  if (secret && data.passphrase !== secret)
-    return res.status(401).json({ error: "bad passphrase" });
+
+  if (secret) {
+    const got = ((data.passphrase ?? data.token) ?? "").toString().trim();
+    if (!got) return res.status(401).json({ error: "missing passphrase" });
+    if (got !== secret) return res.status(401).json({ error: "bad passphrase" });
+  }
+
+  // 一切OK，回聲（之後在這裡接交易邏輯）
   return res.json({ ok: true, echo: data });
+};
+
 };
 app.post("/webhook", webhook);
 app.post("/webhook/", webhook); // 防「多一個斜線」造成 404
