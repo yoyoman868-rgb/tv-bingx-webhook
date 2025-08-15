@@ -1,16 +1,8 @@
 {
-  "name": "tv-bingx-webhook-clean",
-  "version": "1.0.1",
+  "name": "tv-bingx-webhook",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
-  "main": "server.mjs",
-  "scripts": {
-    "start": "node server.mjs"
-  },
-  "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
-  },
-  "engines": {
-    "node": ">=18"
-  }
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": { "express": "^4.19.2" }
 }
